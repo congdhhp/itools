@@ -110,7 +110,9 @@ def discover_metadata(
             key = label.casefold()
             if not key:
                 continue
-            rel = Relation(name, direction, symmetric)
+            # Symmetric relationships use the same outward/inward label.
+            # Both directions are semantically equivalent; canonicalize them.
+            rel = Relation(name, False if symmetric else direction, symmetric)
             if key in relations and relations[key] != rel:
                 ambiguous.add(key)
             else:
