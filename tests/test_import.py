@@ -220,7 +220,6 @@ def test_create_missing_components_and_resume(tmp_path):
         epic_fields = fake.created["DEV-100"]
         assert epic_fields["components"] == [
             {"id": fake.component_catalog["backend"]["id"]},
-            {"id": fake.component_catalog["backend"]["id"]},
             {"id": fake.component_catalog["jenkins"]["id"]},
         ]
         saved = json.loads(state_file_for(path).read_text())
