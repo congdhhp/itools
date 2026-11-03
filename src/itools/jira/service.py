@@ -28,6 +28,8 @@ class JiraMetadata:
     priority_names: set[str]
     component_names: set[str]
     relations: dict[str, Relation]
+    missing_components: tuple[str, ...]
+    component_lookup: dict[str, dict]
 
     def link(self, relationship: str) -> Relation:
         key = relationship.strip().casefold()
@@ -66,6 +68,8 @@ def discover_metadata(
     client: JiraClient,
     project_key: str,
     report: ValidationReport,
+    *,
+    create_components: bool = False,
 ) -> JiraMetadata:
     """Validate project, supported issue types and input values before creating issues."""
     if not report.valid:
@@ -91,13 +95,31 @@ def discover_metadata(
         errors.append("Cannot discover a unique Epic Name custom field; use 'jira field list'")
 
     priorities = {p.get("name", "").casefold() for p in priority_entries}
-    components = {c.get("name", "").casefold() for c in component_entries}
+    # Components live at project scope. Normalize for matching, but retain the
+    # server's canonical name/id for issue creation.
+    normalize = lambda value: " ".join(value.strip().split()).casefold()
+    component_lookup = {normalize(c.get("name", "")): c for c in component_entries}
+    missing: dict[str, tuple[str, set[str]]] = {}
     for issue in report.issues:
         if issue.priority and issue.priority.casefold() not in priorities:
             errors.append(f"Row {issue.row}: priority {issue.priority!r} not found in Jira")
         for component in issue.components:
-            if component.casefold() not in components:
-                errors.append(f"Row {issue.row}: component {component!r} not found in project")
+            normalized = normalize(component)
+            if not normalized:
+                continue
+            if normalized not in component_lookup:
+                if normalized not in missing:
+                    missing[normalized] = (component, set())
+                missing[normalized][1].add(issue.wbs)
+    if missing and not create_components:
+        details = "; ".join(
+            f"{name} (WBS: {', '.join(sorted(wbs))})"
+            for name, wbs in missing.values()
+        )
+        errors.append(
+            f"Missing Jira components in project {project_key}: {details}. "
+            "Create them in Jira or rerun with --create-components."
+        )
 
     relations: dict[str, Relation] = {}
     ambiguous = set()
@@ -141,7 +163,11 @@ def discover_metadata(
 
     if errors:
         raise PreflightError("\n".join(errors))
-    return JiraMetadata(project_key, types, epic_link, epic_name, priorities, components, relations)
+    return JiraMetadata(
+        project_key, types, epic_link, epic_name, priorities,
+        set(component_lookup), relations,
+        tuple(name for name, _ in missing.values()), component_lookup,
+    )
 
 
 def issue_payload(
@@ -161,7 +187,14 @@ def issue_payload(
     if issue.priority:
         fields["priority"] = {"name": issue.priority}
     if issue.components:
-        fields["components"] = [{"name": name} for name in issue.components]
+        resolved = []
+        for name in issue.components:
+            component = metadata.component_lookup.get(" ".join(name.strip().split()).casefold())
+            if component is None:
+                raise PreflightError(f"Component {name!r} has not been resolved")
+            resolved.append({"id": str(component["id"])} if component.get("id") else
+                            {"name": component["name"]})
+        fields["components"] = resolved
     if issue.labels:
         fields["labels"] = list(issue.labels)
     if issue.estimate:
