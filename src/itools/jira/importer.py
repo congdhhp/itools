@@ -26,6 +26,7 @@ class ImportState:
     fingerprints: dict[str, str] = field(default_factory=dict)
     created: dict[str, str] = field(default_factory=dict)
     links: list[str] = field(default_factory=list)
+    created_components: dict[str, str] = field(default_factory=dict)
 
     def as_dict(self):
         return asdict(self)
@@ -55,6 +56,7 @@ def load_state(path: Path, project: str, url: str, resume: bool) -> ImportState:
             project=raw["project"], jira_url=raw["jira_url"],
             fingerprints=raw.get("fingerprints", {}), created=raw.get("created", {}),
             links=raw.get("links", []),
+            created_components=raw.get("created_components", {}),
         )
     except (OSError, ValueError, TypeError, KeyError) as exc:
         raise ImportStateError(f"Invalid import state file {path}: {exc}") from exc
@@ -88,6 +90,8 @@ class ImportSummary:
     links_created_now: int
     links_reused: int
     dry_run: bool = False
+    components_to_create: list[str] = field(default_factory=list)
+    components_created_now: int = 0
 
     def as_dict(self):
         return asdict(self)
@@ -102,12 +106,16 @@ def run_import(
     resume: bool = False,
     state_path: Path | None = None,
     on_progress=None,
+    on_preflight=None,
+    create_components: bool = False,
 ) -> ImportSummary:
     if not report.valid:
         raise PreflightError("Workbook failed validation")
     path = state_path or state_file_for(report.source)
     state = load_state(path, project, client.settings.url, resume)
-    metadata: JiraMetadata = discover_metadata(client, project, report)
+    metadata: JiraMetadata = discover_metadata(
+        client, project, report, create_components=create_components
+    )
 
     issues = {i.wbs: i for i in report.issues}
     for wbs, key in state.created.items():
@@ -123,13 +131,36 @@ def run_import(
         except Exception as exc:
             raise ImportStateError(f"Previously created {wbs} → {key} is unavailable: {exc}") from exc
 
+    if on_preflight:
+        # User approval happens after every read-only validation, before any writes.
+        on_preflight(metadata)
+
     if dry_run:
         # Preview remote preflight without writing to Jira or a state file.
         return ImportSummary(
             project, str(report.source), str(path), dict(state.created),
             len(report.issues) - len(state.created), len(state.created),
             sum(len(i.linked_issues) for i in report.issues), 0, True,
+            components_to_create=list(metadata.missing_components),
         )
+
+    components_created_now = 0
+    normalize = lambda value: " ".join(value.strip().split()).casefold()
+    for name in metadata.missing_components:
+        normalized = normalize(name)
+        # Re-query before creating to handle another admin creating it during preflight
+        # or a previous run crashing after Jira accepted the POST.
+        latest = {normalize(c.get("name", "")): c for c in client.components(project)}
+        if normalized in latest:
+            component = latest[normalized]
+        else:
+            component = client.create_component(project, name)
+            components_created_now += 1
+            if on_progress:
+                on_progress(f"Component created: {component['name']}")
+        metadata.component_lookup[normalized] = component
+        state.created_components[normalized] = str(component["id"])
+        save_state(path, state)
 
     created_now = 0
     reused = 0
@@ -167,6 +198,8 @@ def run_import(
     return ImportSummary(
         project, str(report.source), str(path), dict(state.created),
         created_now, reused, linked_now, linked_reused,
+        components_to_create=list(metadata.missing_components),
+        components_created_now=components_created_now,
     )
 
 
