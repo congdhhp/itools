@@ -239,6 +239,7 @@ def issue_import(
     file: Path = typer.Argument(..., help="Excel WBS plan"),
     project: str = typer.Option(..., "-p", "--project", help="Jira project key"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Remote preflight; no Jira writes"),
+    create_components: bool = typer.Option(False, "--create-components", help="Create missing Jira project components"),
     resume: bool = typer.Option(False, "--resume", help="Resume from saved checkpoint"),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation"),
     state: Path | None = typer.Option(None, "--state", help="Checkpoint file path"),
@@ -252,16 +253,28 @@ def issue_import(
         f"{counts['Sub-task']} Sub-task; "
         f"{sum(len(i.linked_issues) for i in report.issues)} declared links"
     )
-    if not dry_run and not yes:
-        typer.confirm(
-            f"Create issues in Jira project {project.upper()}? (No automatic rollback)",
-            abort=True,
-        )
+    def confirm_preflight(metadata):
+        missing = metadata.missing_components
+        if missing:
+            console.print(f"[yellow]Missing components ({len(missing)}):[/yellow]")
+            for name in missing:
+                console.print(f"  - {name}", highlight=False)
+        if not dry_run and not yes:
+            target = (
+                f"Create {len(missing)} project component(s) and import issues"
+                if missing else "Import issues"
+            )
+            typer.confirm(
+                f"{target} into Jira project {project.upper()}? "
+                "(No automatic rollback)", abort=True,
+            )
+
     try:
         with _client(ctx) as client:
             result = run_import(
                 client, report, project.upper(), dry_run=dry_run, resume=resume,
-                state_path=state,
+                state_path=state, create_components=create_components,
+                on_preflight=confirm_preflight,
                 on_progress=lambda msg: console.print(f"[green]✓[/green] {msg}", highlight=False),
             )
         if output:
