@@ -93,6 +93,16 @@ class JiraClient:
     def components(self, project_key: str):
         return self.get(f"project/{project_key}/components")
 
+    def create_component(self, project_key: str, name: str) -> dict:
+        """Create a Jira project Component with the project default assignee policy."""
+        result = self.post(
+            "component",
+            json={"project": project_key, "name": name, "assigneeType": "PROJECT_DEFAULT"},
+        )
+        if not result.get("id") or not result.get("name"):
+            raise JiraAPIError("POST", "component", 200, "No Component ID/name returned")
+        return result
+
     def get_issue(self, key: str, fields: str = "id"):
         return self.get(f"issue/{key}", params={"fields": fields})
 
