@@ -69,6 +69,8 @@ itools jira issue validate planning.xlsx --format json
 itools jira issue import planning.xlsx -p DEV --dry-run
 itools jira issue import planning.xlsx -p DEV
 itools jira issue import planning.xlsx -p DEV --resume
+itools jira issue import planning.xlsx -p DEV --create-components --dry-run
+itools jira issue import planning.xlsx -p DEV --create-components
 itools jira issue import planning.xlsx -p DEV -y -o import-report.json
 ```
 
@@ -93,12 +95,13 @@ relates to: 1.1.2
 - WBS targets refer to rows in the same workbook; Jira keys refer to already-existing Jira issues. Relationship labels must match the outward/inward strings configured on your server (inspect with `itools jira link-type list`). Inverse duplicates are coalesced before writing.
 - `Original Estimate` is **entered effort**, not a roll-up; numbers mean hours (`1.5` → `1h 30m`). Jira durations such as `2d 4h` also work. This field requires Time Tracking to be enabled and available on the create screen; legacy time tracking configuration may not accept it.
 - Due Date accepts Excel dates, `YYYY-MM-DD` and `DD/MM/YYYY`.
-- `Assignee` uses **Jira Server/DC username**, not Jira Cloud account ID. Comma-separated `Component/s` and `Labels` are supported. Preflight verifies priority/component names.
+- `Assignee` uses **Jira Server/DC username**, not Jira Cloud account ID. Comma-separated `Component/s` and `Labels` are supported. Preflight verifies priorities and checks project Component names.
+- Missing Components **fail before any write by default** and the error shows the missing names and WBS references. With `--create-components`, the importer lists missing Components at preflight and creates only those absent from the project (requires Jira project-admin permission). `--dry-run --create-components` lists proposed creations and never writes. Components are created using Jira's `PROJECT_DEFAULT` assignee policy, and stored by ID in the checkpoint. A second run re-reads Jira to avoid duplicates. For unattended execution, use `--yes` after review. Component creation is project-wide and **is not rolled back** on issue import failure.
 - For Jira Software Server/DC, Epic Name is filled from Summary and Task Epic Link is discovered dynamically using `GET /rest/api/2/field`. Sub-task uses `parent.key`. Required custom fields or screens beyond those represented here must be configured on Jira.
 
 ## Safety and resume
 
-The importer validates the entire workbook locally and checks project, issue types, issue link relationships, priorities, components and referenced external Jira keys **before issuing any creates**.
+The importer validates the entire workbook locally and checks project, issue types, issue link relationships, priorities, components and referenced external Jira keys **before issuing any creates**. With `--create-components`, missing Components are planned during preflight and then created **before** issues, after confirmation (unless `--yes`). A checkpoint records successfully created Components.
 
 Issues are created in dependency order: **Epic → Task → Sub-task**, then all issue links. After each success, the tool saves a local JSON checkpoint beside the input, named `planning.xlsx.itools-state.json`. A repeated import refuses to start unless `--resume` is passed, and resume checks that previously-created WBS rows have not changed. It also checks Jira for previously-created links before adding missing links.
 
