@@ -188,10 +188,15 @@ def issue_payload(
         fields["priority"] = {"name": issue.priority}
     if issue.components:
         resolved = []
+        seen_components: set[str] = set()
         for name in issue.components:
-            component = metadata.component_lookup.get(" ".join(name.strip().split()).casefold())
+            normalized = " ".join(name.strip().split()).casefold()
+            if normalized in seen_components:
+                continue
+            component = metadata.component_lookup.get(normalized)
             if component is None:
                 raise PreflightError(f"Component {name!r} has not been resolved")
+            seen_components.add(normalized)
             resolved.append({"id": str(component["id"])} if component.get("id") else
                             {"name": component["name"]})
         fields["components"] = resolved
